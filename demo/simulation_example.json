@@ -1,0 +1,9 @@
+{
+  "simulation_id": "test_run",
+  "workflow_ref": "demo/demo_workflow.json",
+  "parameters": {
+    "polymer_chain": {
+      "smiles": "C(C)C(C)C(C)C"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "id": "chain_builder",
+  "executable": "python",
+  "script": "../../scripts/chain_builder.py",
+  "input_ports": [],
+  "output_ports": ["polymer_chain"],
+  "parameters": {
+    "monomer": "ethylene"
+  }
+}

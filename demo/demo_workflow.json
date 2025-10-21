@@ -1,0 +1,22 @@
+{
+  "workflow_id": "demo_workflow",
+  "scale": "mw:molecular",
+  "indicator": "mw:LeachingRate",
+  "accuracy": "estimated",
+  "modules": [
+    {
+      "id": "chain_builder",
+      "ref": "modules/chain_builder/chain_builder.json"
+    },
+    {
+      "id": "ff_builder",
+      "ref": "modules/ff_builder/ff_builder.json"
+    }
+  ],
+  "connections": [
+    {
+      "from": { "module": "chain_builder", "output": "polymer_chain" },
+      "to": { "module": "ff_builder", "input": "polymer_chain" }
+    }
+  ]
+}

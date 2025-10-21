@@ -1,0 +1,68 @@
+# nexus/viz/cli.py
+"""
+CLI to visualize a Nexus workflow in the browser.
+"""
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+import webbrowser
+from pathlib import Path
+from .workflow_to_cytoscape import workflow_to_cytoscape
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Visualize a Nexus workflow in the browser.")
+    parser.add_argument("workflow", help="Path to concrete workflow JSON")
+    args = parser.parse_args()
+
+    # Carica il workflow
+    with open(args.workflow) as f:
+        workflow = json.load(f)
+
+    # Converti in formato Cytoscape
+    cy_data = workflow_to_cytoscape(workflow)
+
+    # Crea una directory temporanea per il frontend
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+
+        # Copia i template
+        template_dir = Path(__file__).parent / "templates"
+        for item in template_dir.iterdir():
+            if item.name == "package.json" or item.suffix in (".html", ".jsx"):
+                shutil.copy(item, tmp_path)
+
+        # Scrivi i dati del grafo in un file JS
+        data_js = f"export const graphData = {json.dumps(cy_data, indent=2)};"
+        with open(tmp_path / "graphData.js", "w") as f:
+            f.write(data_js)
+
+        # Modifica main.jsx per importare i dati
+        main_jsx = tmp_path / "main.jsx"
+        with open(main_jsx, "r") as f:
+            content = f.read()
+        content = content.replace(
+            "const WorkflowGraph = ({ graphData }) => {",
+            "import { graphData } from './graphData.js';\n\nconst WorkflowGraph = () => {"
+        )
+        with open(main_jsx, "w") as f:
+            f.write(content)
+
+        # Installa e avvia Vite
+        os.chdir(tmpdir)
+        subprocess.run(["npm", "install"], check=True)
+        server = subprocess.Popen(["npm", "run", "dev"])
+        try:
+            #webbrowser.open("http://localhost:5173")
+            print("✅ Aperto il visualizzatore nel browser. Premi Ctrl+C per uscire.")
+            server.wait()
+        except KeyboardInterrupt:
+            server.terminate()
+            print("\n⏹️  Visualizzatore chiuso.")
+
+
+if __name__ == "__main__":
+    main()

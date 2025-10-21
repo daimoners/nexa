@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nexa"
+version = "0.1.0"
+description = "Semantic workflow engine for modular computational pipelines"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [{name = "DAIMON Team - CNR-ISMN - Italy", email = "francesco.mercuri@cnr.it"}]
+requires-python = ">=3.9"
+dependencies = [
+    "networkx",
+    "rdflib",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "flake8"]
+nextflow = ["nextflow"]
+
+[project.scripts]
+nexa = "nexa.cli:main"
+nexa-viz = "viz.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "nexa"}
+
+[tool.setuptools.packages.find]
+where = ["nexa"]
+include = ["nexa*"]

@@ -1,0 +1,8 @@
+{
+  "id": "ff_builder",
+  "executable": "python",
+  "script": "../../scripts/ff_builder.py",
+  "input_ports": ["polymer_chain"],
+  "output_ports": ["force_field"],
+  "parameters": {}
+}
