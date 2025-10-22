@@ -1,3 +1,5 @@
+![Project Logo](nexa_logo_transparent.png)
+
 # NEXA
 
 **NEXA** is a semantic workflow engine for executing modular, multi-scale computational pipelines.  
