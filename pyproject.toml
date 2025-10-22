@@ -21,11 +21,9 @@ nextflow = ["nextflow"]
 
 [project.scripts]
 nexa = "nexa.cli:main"
-nexa-viz = "viz.cli:main"
-
-[tool.setuptools]
-package-dir = {"" = "nexa"}
+nexa-viz = "nexa.viz.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["nexa"]
+where = ["."]
 include = ["nexa*"]
+
