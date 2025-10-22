@@ -1,4 +1,4 @@
-![Project Logo](nexa_logo_transparent.png)
+![Project Logo](nexa_logo_transp.png)
 
 # NEXA
 
