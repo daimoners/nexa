@@ -14,7 +14,7 @@ It enables the composition of external modules (scripts, executables, containers
 ## Quick Start
 
 ```bash
-git clone https://github.com/your-username/nexa.git
+git clone https://github.com/daimoners/nexa.git
 cd nexa
 pip install -e .
 nexa demo/demo_workflow.json --backend local
