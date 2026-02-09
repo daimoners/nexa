@@ -1,0 +1,68 @@
+{
+  "id": "leaching_evaluator",
+  "label": "Leaching Evaluator",
+  "description": "Calculates molecular leaching rate and annealing temperature from solvated system data.",
+  "scale": "ModelWave:molecular",
+  "implements": {
+    "model": "ModelWave:emulsion_polymerization_molecular",
+    "target": "ModelWave:leaching_rate_molecular"
+  },
+  "ontology_links": {
+    "class": "ModelWave:LeachingEvaluation",
+    "hasInput": {
+      "solvated_system": "ModelWave:SolvatedNanoparticle"
+    },
+    "hasOutput": {
+      "molecular_leaching_rate": "xsd:float",
+      "t_anneal": "xsd:float"
+    }
+  },
+  "connectors": {
+    "inputs": {
+      "solvated_system": {
+        "type": "ModelWave:SolvatedNanoparticle",
+        "format": ["gro", "xyz", "box"],
+        "required": true,
+        "description": "Solvated nanoparticle system data"
+      }
+    },
+    "outputs": {
+      "molecular_leaching_rate": {
+        "type": "xsd:float",
+        "unit": "1/s",
+        "description": "Calculated molecular leaching rate"
+      },
+      "t_anneal": {
+        "type": "xsd:float",
+        "unit": "K",
+        "description": "Optimal annealing temperature"
+      }
+    }
+  },
+  "executable": "python3",
+  "script": "../../scripts/leaching_evaluator.py",
+  "input_ports": ["solvated_system"],
+  "output_ports": ["molecular_leaching_rate", "t_anneal"],
+  "parameters": {
+    "temperature": 298.15,
+    "pressure": 1.0
+  },
+  "produces": {
+    "indicator": "ModelWave:LeachingRate",
+    "accuracy": "ModelWave:EstimatedUncertainty"
+  },
+  "metadata": {
+    "version": "1.1",
+    "author": "CNR",
+    "license": "MIT",
+    "last_updated": "2025-06-25",
+    "documentation_url": "https://example.com/leaching_evaluator_doc"
+  },
+  "competence_questions": [
+    "How to calculate molecular leaching rate from aggregated simulation data?",
+    "What is the annealing temperature derived from molecular data?"
+  ],
+  "provenance_schema": {
+    "$ref": "../provenance_schema.json"
+  }
+}

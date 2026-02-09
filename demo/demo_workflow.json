@@ -1,8 +1,9 @@
 {
-  "workflow_id": "demo_workflow",
-  "scale": "mw:molecular",
-  "indicator": "mw:LeachingRate",
+  "workflow_id": "advanced_demo_workflow",
+  "scale": "ModelWave:molecular",
+  "indicator": "ModelWave:LeachingRate",
   "accuracy": "estimated",
+  "description": "Advanced multi-scale workflow: parallel chain & FF builders → nanoparticle → solvation → leaching evaluation",
   "modules": [
     {
       "id": "chain_builder",
@@ -11,12 +12,36 @@
     {
       "id": "ff_builder",
       "ref": "modules/ff_builder/ff_builder.json"
+    },
+    {
+      "id": "nanoparticle_builder",
+      "ref": "modules/nanoparticle_builder/nanoparticle_builder.json"
+    },
+    {
+      "id": "solvation_module",
+      "ref": "modules/solvation_module/solvation_module.json"
+    },
+    {
+      "id": "leaching_evaluator",
+      "ref": "modules/leaching_evaluator/leaching_evaluator.json"
     }
   ],
   "connections": [
     {
       "from": { "module": "chain_builder", "output": "polymer_chain" },
-      "to": { "module": "ff_builder", "input": "polymer_chain" }
+      "to": { "module": "nanoparticle_builder", "input": "polymer_chain" }
+    },
+    {
+      "from": { "module": "ff_builder", "output": "force_field" },
+      "to": { "module": "nanoparticle_builder", "input": "force_field" }
+    },
+    {
+      "from": { "module": "nanoparticle_builder", "output": "nanoparticle" },
+      "to": { "module": "solvation_module", "input": "nanoparticle" }
+    },
+    {
+      "from": { "module": "solvation_module", "output": "solvated_system" },
+      "to": { "module": "leaching_evaluator", "input": "solvated_system" }
     }
   ]
 }

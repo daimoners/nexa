@@ -1,10 +1,69 @@
 {
   "id": "chain_builder",
-  "executable": "python",
+  "label": "Polymer Chain Builder",
+  "description": "Generates a polymer chain from a list of monomer species and unit ratios.",
+  "ontology_links": {
+    "class": "ModelWave:PolymerModelConstruction",
+    "inputs": {
+      "species": "ModelWave:MonomerSMILES",
+      "unit_ratio": "ModelWave:MonomerRatio",
+      "mw": "ModelWave:MolecularWeight"
+    },
+    "outputs": {
+      "polymer_chain": "ModelWave:PolymerStructure"
+    }
+  },
+  "connectors": {
+    "inputs": {
+      "species": {
+        "type": "ModelWave:MonomerSMILES",
+        "format": ["json", "txt"],
+        "required": true,
+        "description": "List of SMILES strings representing monomers"
+      },
+      "unit_ratio": {
+        "type": "xsd:string",
+        "format": ["string"],
+        "required": true,
+        "description": "Ratio of monomer units, e.g. '1:1'"
+      },
+      "mw": {
+        "type": "xsd:float",
+        "unit": "Da",
+        "required": false,
+        "description": "Desired molecular weight of the polymer chain"
+      }
+    },
+    "outputs": {
+      "polymer_chain": {
+        "type": "ModelWave:PolymerStructure",
+        "format": ["pdb", "mol", "xyz"],
+        "description": "Generated polymer chain structure"
+      }
+    }
+  },
+  "executable": "python3",
   "script": "../../scripts/chain_builder.py",
-  "input_ports": [],
+  "input_ports": ["species", "unit_ratio", "mw"],
   "output_ports": ["polymer_chain"],
   "parameters": {
-    "monomer": "ethylene"
+    "species": ["C(C)C"],
+    "unit_ratio": "1:0",
+    "mw": 5000.0
+  },
+  "metadata": {
+    "version": "1.0",
+    "author": "CNR",
+    "source": "internal_module_library",
+    "license": "MIT",
+    "last_updated": "2025-06-25",
+    "documentation_url": "https://example.com/chain_builder_doc"
+  },
+  "competence_questions": [
+    "How to construct a polymer chain from monomer species and ratios?",
+    "How to control polymer chain length based on molecular weight target?"
+  ],
+  "provenance_schema": {
+    "$ref": "../provenance_schema.json"
   }
 }

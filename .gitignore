@@ -19,6 +19,8 @@ var/
 *.egg-info/
 .installed.cfg
 *.egg
+*.OLD
+.venv
 
 # IDE
 .vscode/
@@ -29,7 +31,26 @@ var/
 # Output
 demo/demo_local/
 demo/runs/
+demo/test_run/
 work/
-nexus_run/
+nexa_run/
+test_run/
 *.nf
 params_*.json
+CLEANUP*
+DOCS_UPDATE*
+READY_FOR*
+
+# Nextflow
+.nextflow/
+.nextflow.log
+
+# User configs (keep examples)
+nexa_config.json
+*_config.json
+!*_config.example.json
+
+# Temporary files
+*.log
+*.tmp
+.DS_Store

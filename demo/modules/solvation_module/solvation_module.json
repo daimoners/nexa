@@ -1,0 +1,61 @@
+{
+  "id": "solvation_module",
+  "label": "Solvation Module",
+  "description": "Adds solvent molecules around a nanoparticle structure.",
+  "ontology_links": {
+    "class": "ModelWave:SolvationSetup",
+    "inputs": {
+      "nanoparticle": "ModelWave:NanoparticleStructure",
+      "solvent_type": "ModelWave:SolventType"
+    },
+    "outputs": {
+      "solvated_system": "ModelWave:SolvatedNanoparticle"
+    }
+  },
+  "connectors": {
+    "inputs": {
+      "nanoparticle": {
+        "type": "ModelWave:NanoparticleStructure",
+        "format": ["gro", "xyz", "cif"],
+        "required": true,
+        "description": "Nanoparticle structure to solvate"
+      },
+      "solvent_type": {
+        "type": "xsd:string",
+        "format": ["string"],
+        "required": true,
+        "description": "Type of solvent to use (e.g., water, ethanol)"
+      }
+    },
+    "outputs": {
+      "solvated_system": {
+        "type": "ModelWave:SolvatedNanoparticle",
+        "format": ["gro", "xyz", "box"],
+        "description": "Nanoparticle solvated with explicit solvent molecules"
+      }
+    }
+  },
+  "executable": "python3",
+  "script": "../../scripts/solvation_module.py",
+  "input_ports": ["nanoparticle", "solvent_type"],
+  "output_ports": ["solvated_system"],
+  "parameters": {
+    "solvent_type": "water",
+    "box_margin": 1.0
+  },
+  "metadata": {
+    "version": "1.0",
+    "author": "CNR",
+    "source": "internal_module_library",
+    "license": "MIT",
+    "last_updated": "2025-06-25",
+    "documentation_url": "https://example.com/solvation_module_doc"
+  },
+  "competence_questions": [
+    "How to add solvent molecules around a nanoparticle?",
+    "What is the optimal solvent type for a given nanoparticle composition?"
+  ],
+  "provenance_schema": {
+    "$ref": "../provenance_schema.json"
+  }
+}

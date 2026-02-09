@@ -34,12 +34,23 @@ class UnifiedExecutor:
             sim = json.load(f)
         return sim.get("parameters", {})
 
-    def run(self, backend: str = "local", workdir: str = None):
+    def run(self, backend: str = "local", workdir: str = None, remotehost: str = None, config_file: str = None):
         if backend not in self.BACKENDS:
             raise ValueError(f"Unsupported backend: {backend}")
 
         backend_cls = self.BACKENDS[backend]
-        runner = backend_cls(workdir=Path(workdir) if workdir else None)
+        
+        if backend == "remote":
+            if not remotehost:
+                raise ValueError("--remotehost is required for remote backend")
+            runner = backend_cls(
+                workdir=Path(workdir) if workdir else None,
+                remotehost=remotehost,
+                config_file=config_file
+            )
+        else:
+            runner = backend_cls(workdir=Path(workdir) if workdir else None)
+        
         runner.execute(self.workflow, self.parameters)
 
         if self.workflow_file:

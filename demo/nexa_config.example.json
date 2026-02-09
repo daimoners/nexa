@@ -1,0 +1,21 @@
+{
+  "remote": {
+    "hostname": "ariadne",
+    "username": "user",
+    "remote_workdir": "/scratch/nexa_runs",
+    "private_key": "~/.ssh/id_rsa"
+  },
+  "slurm": {
+    "partition": "gpu",
+    "nodes": 1,
+    "ntasks_per_node": 4,
+    "cpus_per_task": 2,
+    "time": "01:00:00",
+    "mem_per_cpu": "4G",
+    "modules": ["python/3.10", "rdkit"]
+  },
+  "execution": {
+    "poll_interval": 5,
+    "max_wait_time": 3600
+  }
+}

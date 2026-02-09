@@ -1,0 +1,68 @@
+{
+  "id": "nanoparticle_builder",
+  "label": "Nanoparticle Builder",
+  "description": "Assembles a nanoparticle from a polymer chain, a force field, and a desired size.",
+  "ontology_links": {
+    "class": "ModelWave:NPModelConstruction",
+    "inputs": {
+      "polymer_chain": "ModelWave:PolymerStructure",
+      "force_field": "ModelWave:ForceField",
+      "np_size": "ModelWave:NanoparticleSize"
+    },
+    "outputs": {
+      "nanoparticle": "ModelWave:NanoparticleStructure"
+    }
+  },
+  "connectors": {
+    "inputs": {
+      "polymer_chain": {
+        "type": "ModelWave:PolymerStructure",
+        "format": ["pdb", "mol", "xyz"],
+        "required": true,
+        "description": "Molecular structure of the polymer chain"
+      },
+      "force_field": {
+        "type": "ModelWave:ForceField",
+        "format": ["itp", "top", "xml"],
+        "required": true,
+        "description": "Force field parameters for the polymer"
+      },
+      "np_size": {
+        "type": "xsd:float",
+        "unit": "nm",
+        "required": true,
+        "description": "Target size of the nanoparticle"
+      }
+    },
+    "outputs": {
+      "nanoparticle": {
+        "type": "ModelWave:NanoparticleStructure",
+        "format": ["gro", "xyz", "cif"],
+        "description": "Generated nanoparticle structure"
+      }
+    }
+  },
+  "executable": "python3",
+  "script": "../../scripts/nanoparticle_builder.py",
+  "input_ports": ["polymer_chain", "force_field", "np_size"],
+  "output_ports": ["nanoparticle"],
+  "parameters": {
+    "np_size": 10.0,
+    "np_type": "spherical"
+  },
+  "metadata": {
+    "version": "1.0",
+    "author": "CNR",
+    "source": "internal_module_library",
+    "license": "MIT",
+    "last_updated": "2025-06-25",
+    "documentation_url": "https://example.com/nanoparticle_builder_doc"
+  },
+  "competence_questions": [
+    "How to assemble a nanoparticle from polymer chains and force field parameters?",
+    "What is the expected nanoparticle size given polymer chain and force field inputs?"
+  ],
+  "provenance_schema": {
+    "$ref": "../provenance_schema.json"
+  }
+}

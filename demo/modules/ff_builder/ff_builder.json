@@ -1,8 +1,54 @@
 {
   "id": "ff_builder",
-  "executable": "python",
+  "label": "Force Field Builder",
+  "description": "Generates force field parameters from monomer species specifications.",
+  "ontology_links": {
+    "class": "ModelWave:ForceFieldAssignment",
+    "inputs": {
+      "species": "ModelWave:MonomerSMILES"
+    },
+    "outputs": {
+      "force_field": "ModelWave:ForceField"
+    }
+  },
+  "connectors": {
+    "inputs": {
+      "species": {
+        "type": "ModelWave:MonomerSMILES",
+        "format": ["json", "txt"],
+        "required": true,
+        "description": "Monomer SMILES string for force field parameterization"
+      }
+    },
+    "outputs": {
+      "force_field": {
+        "type": "ModelWave:ForceFieldParameters",
+        "format": ["itp", "top", "xml"],
+        "description": "Generated force field parameters for the monomer"
+      }
+    }
+  },
+  "executable": "python3",
   "script": "../../scripts/ff_builder.py",
-  "input_ports": ["polymer_chain"],
+  "input_ports": ["species"],
   "output_ports": ["force_field"],
-  "parameters": {}
+  "parameters": {
+    "ff_type": "OPLS-AA",
+    "species": "C(C)C"
+  },
+  "metadata": {
+    "version": "1.0",
+    "author": "CNR",
+    "source": "internal_module_library",
+    "license": "MIT",
+    "last_updated": "2025-06-25",
+    "documentation_url": "https://example.com/ff_builder_doc"
+  },
+  "competence_questions": [
+    "How to assign force field parameters to a monomer species?",
+    "Which force field is most appropriate for the given monomer SMILES?"
+  ],
+  "provenance_schema": {
+    "$ref": "../provenance_schema.json"
+  }
 }
