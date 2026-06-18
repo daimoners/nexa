@@ -1,321 +1,296 @@
 # nexa/backends/remote.py
 """
 Remote execution backend using SLURM for HPC clusters.
-Submits jobs to a remote host via SSH and SLURM.
-Respects workflow dependencies and executes in correct order.
+
+Each module in the workflow gets its own SLURM job, submitted to a remote host
+via SSH. Resources (partition, cpus, memory, time) are read first from the
+module's own `resources` field in module.json, then fall back to the global
+SLURM configuration in nexa_config.json. This lets compute-heavy modules (e.g.
+DFT, MD) request different allocations than lightweight pre/post-processing
+modules within the same simulation.
+
+Dependency tracking: modules are submitted only after all their dependencies
+have completed (COMPLETED sacct state). SSH + squeue/sacct polling.
 """
 import json
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
-from collections import defaultdict, deque
-from .base import BaseBackend
+from typing import Dict, Optional
+from .base import BaseBackend, ModuleResult, WorkflowResult
 from ..core.workflow import Workflow
 
 
 class RemoteBackend(BaseBackend):
-    """
-    Remote execution backend using SLURM.
-    Submits workflow jobs to a remote HPC cluster.
-    """
+    """Remote execution via SSH + SLURM, one sbatch per module."""
 
-    def __init__(self, workdir: Path = None, remotehost: str = None, config_file: str = None):
-        """
-        Initialize remote backend.
-        
-        Parameters
-        ----------
-        workdir : Path
-            Local work directory
-        remotehost : str
-            Remote host for SLURM submission (e.g., 'ariadne')
-        config_file : str
-            Path to nexa_config.json with SLURM parameters
-        """
-        super().__init__(workdir)
-        
+    def __init__(self, workdir: Path = None, remotehost: str = None,
+                 config_file: str = None, on_event=None):
+        super().__init__(workdir, on_event)
+
         self.remotehost = remotehost
         self.config = self._load_config(config_file)
-        
-        # SLURM parameters from config or defaults
-        self.slurm_params = self.config.get("slurm", {})
-        self.slurm_partition = self.slurm_params.get("partition", "default")
-        self.slurm_nodes = self.slurm_params.get("nodes", 1)
-        self.slurm_ntasks = self.slurm_params.get("ntasks", 1)
-        self.slurm_time = self.slurm_params.get("time", "01:00:00")
-        self.slurm_mem = self.slurm_params.get("mem", "4G")
-        
-        # Remote paths - extract from "remote" section or use defaults
-        remote_config = self.config.get("remote", {})
-        self.remote_workdir = remote_config.get("remote_workdir", f"/tmp/nexa_run_{int(time.time())}")
-        self.remote_username = remote_config.get("username", "")
-        self.remote_private_key = remote_config.get("private_key", None)
-        
-        # Job tracking
-        self.job_ids = {}  # module_id -> slurm_job_id
-        self.job_status = {}  # module_id -> status
-        
-        print(f"[REMOTE] Backend initialized")
-        print(f"  Remote host: {self.remotehost}")
-        print(f"  Remote workdir: {self.remote_workdir}")
-        print(f"  SLURM partition: {self.slurm_partition}")
-        print(f"  SLURM time limit: {self.slurm_time}")
 
-    def _load_config(self, config_file: Optional[str]) -> Dict:
-        """Load NEXA configuration from JSON file."""
-        if config_file:
-            config_path = Path(config_file).resolve()
-            if config_path.exists():
-                with open(config_path) as f:
+        slurm = self.config.get("slurm", {})
+        self._default_partition = slurm.get("partition", "default")
+        self._default_nodes = slurm.get("nodes", 1)
+        self._default_ntasks = slurm.get("ntasks", 1)
+        self._default_time = slurm.get("time", "01:00:00")
+        self._default_mem = slurm.get("mem", "4G")
+        self._slurm_modules = slurm.get("modules", [])   # env-modules to load
+
+        remote_cfg = self.config.get("remote", {})
+        self.remote_workdir = remote_cfg.get(
+            "remote_workdir", f"/tmp/nexa_run_{int(time.time())}"
+        )
+        self.remote_username = remote_cfg.get("username", "")
+        self.remote_private_key = remote_cfg.get("private_key", None)
+
+        exec_cfg = self.config.get("execution", {})
+        self._poll_interval = exec_cfg.get("poll_interval", 5)
+        self._max_wait = exec_cfg.get("max_wait_time", 3600)
+
+        print(f"[REMOTE] Backend initialized")
+        print(f"  Remote host    : {self.remotehost}")
+        print(f"  Remote workdir : {self.remote_workdir}")
+        print(f"  Default partition: {self._default_partition}")
+
+    # ── config ───────────────────────────────────────────────────────────────
+
+    def _load_config(self, config_file: Optional[str]) -> dict:
+        for path in ([Path(config_file).resolve()] if config_file else []) + [Path("nexa_config.json")]:
+            if Path(path).exists():
+                with open(path) as f:
                     return json.load(f)
-        
-        # Try default nexa_config.json
-        default_path = Path("nexa_config.json")
-        if default_path.exists():
-            with open(default_path) as f:
-                return json.load(f)
-        
-        # Return empty config if not found
         return {}
 
-    def _run_ssh_command(self, cmd: str) -> tuple:
-        """
-        Execute command on remote host via SSH.
-        
-        Returns
-        -------
-        tuple
-            (returncode, stdout, stderr)
-        """
+    # ── SSH helpers ───────────────────────────────────────────────────────────
+
+    def _ssh(self, cmd: str) -> tuple:
+        """Run cmd on remotehost via SSH. Returns (returncode, stdout, stderr)."""
         if not self.remotehost:
             raise ValueError("remotehost not specified for remote backend")
-        
-        ssh_cmd = f"ssh {self.remotehost} '{cmd}'"
-        result = subprocess.run(ssh_cmd, shell=True, capture_output=True, text=True)
+        result = subprocess.run(
+            f"ssh {self.remotehost} '{cmd}'", shell=True,
+            capture_output=True, text=True,
+        )
         return result.returncode, result.stdout, result.stderr
 
-    def _submit_slurm_job(self, module_id: str, script_path: str, 
-                          inputs: Dict[str, Path], params: Dict) -> str:
-        """
-        Submit a module job to SLURM.
-        
-        Returns
-        -------
-        str
-            SLURM job ID
-        """
-        # Create SLURM submission script
-        script_content = self._create_slurm_script(module_id, script_path, inputs, params)
-        
-        # Write script to local file
-        script_file = self.workdir / f"submit_{module_id}.sh"
-        with open(script_file, "w") as f:
-            f.write(script_content)
-        
-        # Copy script to remote
-        scp_cmd = f"scp {script_file} {self.remotehost}:{self.remote_workdir}/"
-        result = subprocess.run(scp_cmd, shell=True, capture_output=True, text=True)
+    def _scp_to_remote(self, local: Path, remote_path: str) -> None:
+        cmd = f"scp {local} {self.remotehost}:{remote_path}"
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         if result.returncode != 0:
-            raise RuntimeError(f"Failed to copy script to remote: {result.stderr}")
-        
-        # Submit to SLURM
-        submit_cmd = f"cd {self.remote_workdir} && sbatch submit_{module_id}.sh"
-        returncode, stdout, stderr = self._run_ssh_command(submit_cmd)
-        
+            raise RuntimeError(f"scp failed: {result.stderr}")
+
+    def _rsync_from_remote(self, remote_dir: str, local_dir: Path) -> None:
+        local_dir.mkdir(parents=True, exist_ok=True)
+        cmd = f"rsync -avz {self.remotehost}:{remote_dir}/ {local_dir}/"
+        subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+    # ── per-module resource resolution ───────────────────────────────────────
+
+    def _res(self, module, key: str, default):
+        """Return module-level resource override, or global default."""
+        return module.resources.get(key, default)
+
+    # ── SLURM submission ─────────────────────────────────────────────────────
+
+    def _slurm_script(self, module, script_path: str,
+                      inputs: dict, params: dict,
+                      params_remote_path: Optional[str]) -> str:
+        """Build a self-contained bash/SBATCH script for one module."""
+        partition = self._res(module, "partition", self._default_partition)
+        nodes = self._res(module, "nodes", self._default_nodes)
+        ntasks = self._res(module, "cpus", self._res(module, "ntasks", self._default_ntasks))
+        time_limit = self._res(module, "time", self._default_time)
+        mem = self._res(module, "mem", self._res(module, "memory", self._default_mem))
+
+        output_dir = f"{self.remote_workdir}/outputs/{module.id}"
+
+        input_args = "".join(
+            f"--input {port} {path} " for port, path in inputs.items()
+        )
+        params_arg = f"--params {params_remote_path}" if params_remote_path else ""
+
+        # Optional: load environment modules
+        module_loads = "\n".join(f"module load {m}" for m in self._slurm_modules)
+
+        return (
+            f"#!/bin/bash\n"
+            f"#SBATCH --job-name={module.id}\n"
+            f"#SBATCH --partition={partition}\n"
+            f"#SBATCH --nodes={nodes}\n"
+            f"#SBATCH --ntasks={ntasks}\n"
+            f"#SBATCH --time={time_limit}\n"
+            f"#SBATCH --mem={mem}\n"
+            f"#SBATCH --output={self.remote_workdir}/{module.id}_%j.out\n"
+            f"#SBATCH --error={self.remote_workdir}/{module.id}_%j.err\n"
+            f"\n"
+            f"{module_loads}\n"
+            f"\n"
+            f"mkdir -p {output_dir}\n"
+            f"\n"
+            f"python3 {script_path} \\\n"
+            f"    {input_args} \\\n"
+            f"    {params_arg} \\\n"
+            f"    --output_dir {output_dir}\n"
+        )
+
+    def _submit_module(self, module, script_path: str,
+                       inputs: dict, params: dict) -> str:
+        """Materialise SLURM script, scp + sbatch. Returns SLURM job id."""
+        # Serialise params to remote if needed
+        params_remote = None
+        if params:
+            local_pf = self.workdir / f"{module.id}_params.json"
+            local_pf.write_text(json.dumps(params))
+            remote_pf = f"{self.remote_workdir}/{module.id}_params.json"
+            self._scp_to_remote(local_pf, remote_pf)
+            params_remote = remote_pf
+
+        script_content = self._slurm_script(module, script_path, inputs, params, params_remote)
+        local_sh = self.workdir / f"submit_{module.id}.sh"
+        local_sh.write_text(script_content)
+
+        self._scp_to_remote(local_sh, f"{self.remote_workdir}/")
+
+        returncode, stdout, stderr = self._ssh(
+            f"cd {self.remote_workdir} && sbatch submit_{module.id}.sh"
+        )
         if returncode != 0:
-            raise RuntimeError(f"SLURM submission failed: {stderr}")
-        
-        # Extract job ID from sbatch output
-        # Output format: "Submitted batch job 12345"
+            raise RuntimeError(f"sbatch failed for {module.id}: {stderr}")
+
         job_id = stdout.strip().split()[-1]
-        print(f"[REMOTE] {module_id}: Submitted SLURM job {job_id}")
-        
+        print(f"[REMOTE] {module.id}: submitted SLURM job {job_id} "
+              f"(partition={self._res(module, 'partition', self._default_partition)}, "
+              f"mem={self._res(module, 'mem', self._default_mem)})")
         return job_id
 
-    def _create_slurm_script(self, module_id: str, script_path: str,
-                             inputs: Dict[str, Path], params: Dict) -> str:
-        """Create a SLURM submission script."""
-        
-        # Build input arguments
-        input_args = ""
-        for port, path in inputs.items():
-            input_args += f"--input {port} {path} "
-        
-        # Build output directory
-        output_dir = f"{self.remote_workdir}/outputs/{module_id}"
-        
-        # Create SLURM script
-        script = f"""#!/bin/bash
-#SBATCH --job-name={module_id}
-#SBATCH --partition={self.slurm_partition}
-#SBATCH --nodes={self.slurm_nodes}
-#SBATCH --ntasks={self.slurm_ntasks}
-#SBATCH --time={self.slurm_time}
-#SBATCH --mem={self.slurm_mem}
-#SBATCH --output={self.remote_workdir}/{module_id}_%j.out
-#SBATCH --error={self.remote_workdir}/{module_id}_%j.err
-
-# Create output directory
-mkdir -p {output_dir}
-
-# Run module
-python3 {script_path} \\
-    {input_args} \\
-    --output_dir {output_dir}
-
-if [ $? -eq 0 ]; then
-    echo "SUCCESS"
-    exit 0
-else
-    echo "FAILED"
-    exit 1
-fi
-"""
-        
-        if params:
-            # Save params to file
-            params_file = f"{self.remote_workdir}/{module_id}_params.json"
-            script += f"\n# Add params to command\n"
-            # Params would be serialized and passed in actual implementation
-        
-        return script
-
-    def _wait_for_job(self, job_id: str, module_id: str, timeout: int = 3600) -> bool:
-        """
-        Wait for SLURM job to complete.
-        
-        Parameters
-        ----------
-        job_id : str
-            SLURM job ID
-        module_id : str
-            Module identifier
-        timeout : int
-            Maximum time to wait in seconds
-            
-        Returns
-        -------
-        bool
-            True if job succeeded, False otherwise
-        """
-        start_time = time.time()
-        
-        while time.time() - start_time < timeout:
-            # Check job status
-            check_cmd = f"squeue -j {job_id} -h"
-            returncode, stdout, stderr = self._run_ssh_command(check_cmd)
-            
-            if returncode == 0 and not stdout.strip():
-                # Job not in queue anymore - check if it succeeded
-                check_exit_cmd = f"sacct -j {job_id} --format=State --noheader"
-                returncode, stdout, stderr = self._run_ssh_command(check_exit_cmd)
-                
-                state = stdout.strip()
+    def _wait_for_job(self, job_id: str, module_id: str) -> bool:
+        start = time.time()
+        while time.time() - start < self._max_wait:
+            rc, stdout, _ = self._ssh(f"squeue -j {job_id} -h")
+            if rc == 0 and not stdout.strip():
+                # Job left the queue — check final state
+                _, state_out, _ = self._ssh(
+                    f"sacct -j {job_id} --format=State --noheader"
+                )
+                state = state_out.strip()
                 if "COMPLETED" in state:
-                    print(f"[REMOTE] {module_id}: Job {job_id} COMPLETED")
+                    print(f"[REMOTE] {module_id}: job {job_id} COMPLETED")
                     return True
-                else:
-                    print(f"[REMOTE] {module_id}: Job {job_id} FAILED (state: {state})")
-                    return False
-            
-            # Job still running
-            print(f"[REMOTE] {module_id}: Job {job_id} still running...")
-            time.sleep(5)
-        
-        print(f"[REMOTE] {module_id}: Job {job_id} TIMEOUT")
+                print(f"[REMOTE] {module_id}: job {job_id} FAILED (state={state})")
+                return False
+            print(f"[REMOTE] {module_id}: job {job_id} still running …")
+            time.sleep(self._poll_interval)
+        print(f"[REMOTE] {module_id}: job {job_id} TIMEOUT")
         return False
 
-    def execute(self, workflow: Workflow, parameters: dict = None):
-        """
-        Execute workflow on remote SLURM cluster.
-        Respects dependencies and submits jobs accordingly.
-        """
-        print(f"\n[REMOTE] Executing workflow '{workflow.workflow_id}' on {self.remotehost}")
-        
-        # Create remote work directory
-        mkdir_cmd = f"mkdir -p {self.remote_workdir}/outputs"
-        returncode, _, stderr = self._run_ssh_command(mkdir_cmd)
-        if returncode != 0:
-            raise RuntimeError(f"Failed to create remote directory: {stderr}")
-        
-        # Get execution order
+    # ── execute ───────────────────────────────────────────────────────────────
+
+    def execute(self, workflow: Workflow, parameters: dict = None) -> WorkflowResult:
+        print(f"\n[REMOTE] Executing '{workflow.workflow_id}' on {self.remotehost}")
+
+        # Create remote workdir
+        rc, _, err = self._ssh(f"mkdir -p {self.remote_workdir}/outputs")
+        if rc != 0:
+            raise RuntimeError(f"Failed to create remote directory: {err}")
+
         order = workflow.get_execution_order()
         print(f"[REMOTE] Execution order: {order}")
-        
-        # Build dependency graph for job submission
-        submitted_jobs = {}  # module_id -> job_id
-        completed_modules = set()
-        
+
+        module_results: Dict[str, ModuleResult] = {}
+        completed: set = set()
+
         for mod_id in order:
             module = workflow.module_map[mod_id]
-            
-            # Wait for dependencies before submitting
-            deps_satisfied = False
-            while not deps_satisfied:
-                deps = []
-                for conn in workflow.connections:
-                    if conn["to"]["module"] == mod_id:
-                        deps.append(conn["from"]["module"])
-                
-                deps_satisfied = all(d in completed_modules for d in deps)
-                
-                if not deps_satisfied:
-                    print(f"[REMOTE] {mod_id}: Waiting for dependencies: {set(deps) - completed_modules}")
-                    # Check on submitted jobs
-                    for check_mod, job_id in submitted_jobs.items():
-                        if check_mod not in completed_modules:
-                            if self._wait_for_job(job_id, check_mod):
-                                completed_modules.add(check_mod)
-                    time.sleep(1)
-            
-            # All dependencies satisfied - collect module inputs
+
+            # Collect inputs (remote paths from already-completed modules)
             inputs = {}
             for conn in workflow.connections:
                 if conn["to"]["module"] == mod_id:
-                    src_mod = conn["from"]["module"]
-                    src_port = conn["from"]["output"]
-                    dst_port = conn["to"]["input"]
-                    input_path = f"{self.remote_workdir}/outputs/{src_mod}/{src_port}.json"
-                    inputs[dst_port] = Path(input_path)
-            
-            # Gather parameters
+                    inputs[conn["to"]["input"]] = (
+                        f"{self.remote_workdir}/outputs/"
+                        f"{conn['from']['module']}/{conn['from']['output']}.json"
+                    )
+
+            # Merge parameters
             mod_params = dict(module.parameters)
             if parameters:
                 for k, v in parameters.items():
                     if k in mod_params:
                         mod_params[k] = v
-            
-            # Get script path
+
             script_path = module.get_script_path()
             if script_path is None:
-                raise ValueError(f"Module {module.id} has no script defined.")
-            
-            # Submit job to SLURM
+                module_results[mod_id] = ModuleResult(
+                    module_id=mod_id, status="failed", error="No script defined"
+                )
+                # Skip remaining
+                for remaining in order:
+                    if remaining not in module_results:
+                        module_results[remaining] = ModuleResult(
+                            module_id=remaining, status="skipped",
+                            error=f"Upstream {mod_id} has no script"
+                        )
+                return WorkflowResult(
+                    workflow_id=workflow.workflow_id, status="failed",
+                    modules=module_results, error=f"Module {mod_id} has no script"
+                )
+
+            self._emit("module_start", mod_id, {})
             try:
-                job_id = self._submit_slurm_job(mod_id, str(script_path), inputs, mod_params)
-                submitted_jobs[mod_id] = job_id
-                
-                # Wait for job completion
-                if self._wait_for_job(job_id, mod_id):
-                    completed_modules.add(mod_id)
-                else:
-                    raise RuntimeError(f"Module {mod_id} failed on remote host")
-                    
-            except Exception as e:
-                print(f"[REMOTE] Error submitting {mod_id}: {e}")
-                raise
-        
-        # Copy results back
-        print(f"[REMOTE] Copying results back from {self.remotehost}")
+                job_id = self._submit_module(module, str(script_path), inputs, mod_params)
+                succeeded = self._wait_for_job(job_id, mod_id)
+            except Exception as exc:
+                succeeded = False
+                print(f"[REMOTE] Error for {mod_id}: {exc}")
+
+            outputs = {port: f"{self.remote_workdir}/outputs/{mod_id}/{port}.json"
+                       for port in module.output_ports}
+
+            if succeeded:
+                completed.add(mod_id)
+                module_results[mod_id] = ModuleResult(
+                    module_id=mod_id, status="success",
+                    returncode=0, outputs=outputs,
+                )
+                self._emit("module_complete", mod_id, {"outputs": outputs})
+            else:
+                module_results[mod_id] = ModuleResult(
+                    module_id=mod_id, status="failed",
+                    returncode=1, error="SLURM job failed or timed out",
+                )
+                self._emit("module_failed", mod_id, {})
+                # Skip remaining
+                for remaining in order:
+                    if remaining not in module_results:
+                        module_results[remaining] = ModuleResult(
+                            module_id=remaining, status="skipped",
+                            error=f"Upstream {mod_id} failed"
+                        )
+                return WorkflowResult(
+                    workflow_id=workflow.workflow_id, status="failed",
+                    modules=module_results, error=f"Module {mod_id} failed"
+                )
+
+        # Copy all outputs back to local workdir
+        print(f"[REMOTE] Syncing outputs from {self.remotehost} …")
         for mod_id in workflow.module_map:
-            remote_dir = f"{self.remotehost}:{self.remote_workdir}/outputs/{mod_id}"
-            local_dir = self.workdir / "outputs" / mod_id
-            local_dir.mkdir(parents=True, exist_ok=True)
-            
-            rsync_cmd = f"rsync -avz {remote_dir}/ {local_dir}/"
-            result = subprocess.run(rsync_cmd, shell=True, capture_output=True, text=True)
-            if result.returncode == 0:
-                print(f"[REMOTE] Copied outputs for {mod_id}")
-        
+            self._rsync_from_remote(
+                f"{self.remote_workdir}/outputs/{mod_id}",
+                self.workdir / "outputs" / mod_id,
+            )
+            # Update output paths to local
+            if mod_id in module_results and module_results[mod_id].status == "success":
+                local_out = self.workdir / "outputs" / mod_id
+                module_results[mod_id].outputs = {
+                    port: str(local_out / f"{port}.json")
+                    for port in workflow.module_map[mod_id].output_ports
+                }
+
         print(f"[REMOTE] Workflow execution completed")
+        return WorkflowResult(
+            workflow_id=workflow.workflow_id, status="success",
+            modules=module_results, outputs_dir=self.workdir / "outputs",
+        )

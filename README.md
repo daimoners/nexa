@@ -8,29 +8,20 @@ NEXA is a Python-based semantic workflow orchestration engine that executes modu
 
 ## Features
 
-- **Semantic Workflow Definitions**: JSON-based workflow descriptions with ontological metadata
-- **Modular Architecture**: Loosely-coupled modules communicating via JSON data files
-- **Dependency-Aware Execution**: Automatic DAG analysis and topological sorting
-- **Multiple Backends**: Local subprocess, Nextflow, and remote SLURM cluster execution
-- **Parallel Execution**: Independent modules run in parallel automatically
-- **Interactive Visualization**: Web-based workflow visualization with React Flow
+- **Semantic Workflow Definitions**: JSON workflow descriptions with ontological metadata
+- **Modular Architecture**: loosely-coupled modules communicating via JSON data files
+- **Dependency-Aware Execution**: automatic DAG analysis and topological sorting (Kahn's algorithm)
+- **Parallel Execution**: independent modules run concurrently in the same topological level
+- **Per-Module Resources**: each module can declare its own SLURM resource requirements
+- **Multiple Backends**: local subprocess, Nextflow, and remote SLURM cluster execution
+- **Structured Results**: `WorkflowResult` / `ModuleResult` return types for programmatic inspection
+- **Event Callbacks**: real-time per-module status updates via `on_module_event`
+- **Interactive Visualization**: web-based workflow visualization with React Flow
 
 ## Installation
 
 ```bash
 pip install -e .
-```
-
-Or install from PyPI (when published):
-```bash
-pip install nexa
-```
-
-### Visualization (Optional)
-
-For web-based workflow visualization:
-```bash
-npm install -g nexa-viz
 ```
 
 ## Quick Start
@@ -41,21 +32,22 @@ NEXA includes a complete 5-module demo workflow:
 # Run the demo workflow locally
 nexa demo/demo_workflow.json --backend local
 
-# Visualize the workflow (requires Node.js)
+# With simulation parameters
+nexa demo/demo_workflow.json --simulation demo/simulation_example.json --backend local
+
+# Visualize the workflow
 nexa-viz demo/demo_workflow.json
 ```
 
 The demo workflow demonstrates:
-- **Parallel execution**: chain_builder and ff_builder run simultaneously
-- **Data fusion**: nanoparticle_builder merges outputs from both builders
-- **Sequential dependencies**: solvation_module → leaching_evaluator
-- **Multi-output modules**: leaching_evaluator produces 2 output files
-
-See [demo/README.md](demo/README.md) for details.
+- **Parallel execution** — `chain_builder` and `ff_builder` have no dependency between them and run in the same level simultaneously
+- **Data fusion** — `nanoparticle_builder` merges outputs from both builders
+- **Sequential dependencies** — `solvation_module` → `leaching_evaluator`
+- **Multi-output modules** — `leaching_evaluator` produces 2 output files
 
 ## Usage
 
-### Basic Workflow Execution
+### CLI
 
 ```bash
 # Local execution
@@ -66,15 +58,101 @@ nexa workflow.json --simulation params.json --backend local
 
 # Custom work directory
 nexa workflow.json --backend local --workdir my_run
+
+# Nextflow execution
+nexa workflow.json --backend nextflow --workdir nf_run
+
+# Remote SLURM execution
+nexa workflow.json --backend remote --remotehost cluster.example.com \
+    --config nexa_config.json
 ```
 
-### Remote Execution (SLURM)
+### Python API
 
-Execute workflows on HPC clusters:
+```python
+from nexa import UnifiedExecutor, WorkflowResult
+
+executor = UnifiedExecutor("workflow.json", "simulation.json")
+
+# Optional: per-module event callback
+def on_event(event_type, module_id, data):
+    print(f"[{event_type}] {module_id}")
+
+result: WorkflowResult = executor.run(
+    backend="local",
+    workdir="my_run",
+    on_module_event=on_event,
+)
+
+print(result.status)        # "success" | "failed"
+for mod_id, mod in result.modules.items():
+    print(f"  {mod_id}: {mod.status}  outputs={mod.outputs}")
+```
+
+## Workflow Definition
+
+```json
+{
+  "workflow_id": "my_workflow",
+  "scale": "molecular",
+  "indicator": "leaching_rate",
+  "description": "Example multi-module workflow",
+  "modules": [
+    { "id": "module_a", "ref": "modules/module_a/module_a.json" },
+    { "id": "module_b", "ref": "modules/module_b/module_b.json" }
+  ],
+  "connections": [
+    {
+      "from": { "module": "module_a", "output": "result" },
+      "to":   { "module": "module_b", "input":  "data"   }
+    }
+  ]
+}
+```
+
+## Module Definition
+
+```json
+{
+  "id": "chain_builder",
+  "label": "Polymer Chain Builder",
+  "executable": "python3",
+  "script": "../../scripts/chain_builder.py",
+  "input_ports":  [],
+  "output_ports": ["polymer_chain"],
+  "parameters": {
+    "species": ["C(C)C"],
+    "mw": 5000.0
+  },
+  "resources": {
+    "partition": "cpu",
+    "cpus": 4,
+    "mem": "8G",
+    "time": "00:30:00"
+  }
+}
+```
+
+`resources` is optional. When present it overrides the global SLURM settings in `nexa_config.json` for that specific module — useful when different modules need different allocations (e.g. a DFT module on `gpu` and a pre-processing module on `cpu`).
+
+### Module Script Interface
+
+All module scripts must follow this interface:
 
 ```bash
-# Create nexa_config.json with SLURM parameters
-cat > nexa_config.json << EOF
+python3 script.py \
+    [--input <port> <path.json>] ...  \
+    [--params  <params.json>]          \
+    --output_dir <dir>
+```
+
+Outputs are written as `<output_dir>/<port>.json`, one file per output port.
+
+## Remote Execution (SLURM)
+
+Create `nexa_config.json`:
+
+```json
 {
   "remote": {
     "hostname": "cluster.example.com",
@@ -82,165 +160,109 @@ cat > nexa_config.json << EOF
     "remote_workdir": "/scratch/user/nexa_runs"
   },
   "slurm": {
-    "partition": "gpu",
+    "partition": "default",
+    "nodes": 1,
+    "ntasks": 1,
     "time": "01:00:00",
-    "mem_per_cpu": "4G"
-  }
-}
-EOF
-
-# Run on remote cluster
-nexa workflow.json --backend remote --remotehost cluster.example.com --config nexa_config.json
-```
-
-## Workflow Structure
-
-### Workflow Definition (JSON)
-
-```json
-{
-  "name": "my_workflow",
-  "modules": [
-    {
-      "id": "module_a",
-      "definition": "path/to/module_a.json"
-    },
-    {
-      "id": "module_b",
-      "definition": "path/to/module_b.json"
-    }
-  ],
-  "connections": [
-    {
-      "from": {"module": "module_a", "port": "output_data"},
-      "to": {"module": "module_b", "port": "input_data"}
-    }
-  ]
-}
-```
-
-### Module Definition (JSON)
-
-```json
-{
-  "name": "example_module",
-  "version": "1.0.0",
-  "executable": "python3",
-  "script": "scripts/example.py",
-  "inputs": {
-    "input_data": {
-      "semantic_type": "http://example.org/DataFormat"
-    }
+    "mem": "4G",
+    "modules": ["python/3.11", "rdkit"]
   },
-  "outputs": {
-    "output_data": {
-      "semantic_type": "http://example.org/ResultFormat"
-    }
+  "execution": {
+    "poll_interval": 5,
+    "max_wait_time": 3600
   }
 }
 ```
 
-## Supported Backends
+Global SLURM settings apply to every module; per-module `resources` in `module.json` take precedence.
 
-| Backend | Description | Use Case |
-|---------|-------------|----------|
-| **local** | Subprocess execution | Development, testing, small workflows |
-| **nextflow** | Nextflow pipeline | Container-based, reproducible workflows |
-| **remote** | SLURM cluster | HPC execution, large-scale computations |
+```bash
+nexa workflow.json --backend remote --remotehost cluster.example.com \
+    --config nexa_config.json
+```
+
+## Backends
+
+| Backend | Fan-out | Use case |
+|---------|---------|----------|
+| `local` | thread pool (parallel levels) | development, single machine |
+| `nextflow` | Nextflow DSL2 | container-based, reproducible |
+| `remote` | one `sbatch` per module | HPC clusters, per-module resource control |
+
+## Parallel Execution (local backend)
+
+The local backend groups modules into **topological levels**: all modules whose dependencies are already complete form a level and execute concurrently via `ThreadPoolExecutor`.
+
+Example for the demo workflow:
+```
+level 0: [chain_builder, ff_builder]   ← parallel (no inter-dependency)
+level 1: [nanoparticle_builder]
+level 2: [solvation_module]
+level 3: [leaching_evaluator]
+```
 
 ## Architecture
 
 NEXA workflows are directed acyclic graphs (DAGs) where:
-- **Modules** are computational units (Python scripts, executables)
-- **Connections** define data flow between modules
-- **Ports** are typed inputs/outputs with semantic annotations
-- **Execution** follows topological order respecting dependencies
+- **Modules** are computational units (Python scripts, executables, containers)
+- **Connections** define data flow between modules via typed ports
+- **Ports** are named inputs/outputs; data travels as JSON files
+- **Execution** respects topological order; independent modules run in parallel
 
 ```
-┌─────────┐     ┌─────────┐
-│ Module A│────▶│ Module C│
-└─────────┘  ┌─▶└─────────┘
-             │
-┌─────────┐  │
-│ Module B│──┘
-└─────────┘
+┌─────────────┐    ┌──────────────────┐
+│ chain_builder│──▶│                  │
+└─────────────┘    │ nanoparticle_bld │──▶ solvation ──▶ leaching
+┌─────────────┐    │                  │
+│  ff_builder  │──▶│                  │
+└─────────────┘    └──────────────────┘
+      level 0              level 1           level 2      level 3
 ```
 
-## Development
-
-### Project Structure
+## Project Structure
 
 ```
 nexa/
-├── nexa/              # Core engine
-│   ├── core/          # Workflow and module classes
-│   ├── backends/      # Execution backends
-│   ├── viz/           # Visualization tools
-│   └── cli.py         # Command-line interface
-├── demo/              # Example workflow
-│   ├── modules/       # Module definitions
-│   └── scripts/       # Module scripts
-└── docs/              # Documentation
+├── nexa/
+│   ├── core/
+│   │   ├── module.py       # Module class (loads module.json, resolves resources)
+│   │   └── workflow.py     # Workflow class (loads workflow.json, topological sort)
+│   ├── backends/
+│   │   ├── base.py         # BaseBackend, WorkflowResult, ModuleResult, EventCallback
+│   │   ├── local.py        # LocalBackend (parallel levels via ThreadPoolExecutor)
+│   │   ├── remote.py       # RemoteBackend (SSH + sbatch, per-module resources)
+│   │   └── nextflow.py     # NextflowBackend (DSL2 generation)
+│   ├── viz/                # Web-based workflow visualization
+│   └── cli.py              # CLI entry point
+├── demo/                   # 5-module example workflow
+│   ├── modules/            # Module definitions
+│   └── scripts/            # Module scripts
+└── docs/                   # Extended documentation
 ```
-
-### Running Tests
-
-```bash
-# Test local backend
-nexa demo/demo_workflow.json --backend local
-
-# Validate workflow structure
-python -m nexa.core.workflow demo/demo_workflow.json
-```
-
-## Documentation
-
-Full documentation available in the [docs/](docs/) directory:
-- [Installation Guide](docs/installation.md)
-- [Quick Start Tutorial](docs/quickstart.md)
-- [Workflow Concepts](docs/concepts/workflows.md)
-- [Module Development](docs/concepts/modules.md)
-- [Semantic Matching](docs/concepts/semantic-matching.md)
-- [Backend Configuration](docs/execution/backends.md)
-- [Nextflow Integration](docs/execution/nextflow.md)
-- [Visualization Guide](docs/visualization.md)
 
 ## Requirements
 
 - Python 3.10+
-- NetworkX (for DAG operations)
-- RDFlib (for ontology support)
+- `networkx` (DAG operations)
+- `rdflib` (ontology support)
 
 Optional:
-- Node.js 14+ (for visualization)
-- Vite (for web UI)
-- SSH access (for remote backend)
-- SLURM (for HPC execution)
+- Node.js 14+ (visualization)
+- SSH access (remote backend)
+- SLURM (HPC execution)
+- Nextflow (Nextflow backend)
 
 ## License
 
 See [LICENSE](LICENSE) for details.
 
-## Contributing
-
-Contributions welcome! Please ensure:
-- Code follows PEP 8 style
-- New features include tests
-- Documentation is updated
-
 ## Citation
-
-If you use NEXA in your research, please cite:
 
 ```bibtex
 @software{nexa_2025,
-  title = {NEXA: Semantic Workflow Engine},
+  title  = {NEXA: Semantic Workflow Engine},
   author = {NEXA Contributors},
-  year = {2025},
-  url = {https://github.com/daimoners/nexa}
+  year   = {2025},
+  url    = {https://github.com/daimoners/nexa}
 }
 ```
-
-## Contact
-
-For questions, issues, or feature requests, please open an issue on GitHub.

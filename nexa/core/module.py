@@ -24,6 +24,7 @@ class Module:
         output_ports: List[str] = None,
         parameters: Dict[str, Any] = None,
         base_path: Path = None,
+        resources: Dict[str, Any] = None,
     ):
         """
         Initialize a module.
@@ -46,6 +47,10 @@ class Module:
             Default parameters for this module.
         base_path : Path
             Directory containing the module definition JSON file.
+        resources : dict, optional
+            Per-module SLURM resource requirements, e.g.
+            {"cpus": 4, "mem": "16G", "time": "02:00:00", "partition": "gpu"}.
+            Overrides the global SLURM config in RemoteBackend for this module.
         """
         self.id = id
         self.executable = executable
@@ -55,6 +60,7 @@ class Module:
         self.output_ports = output_ports or []
         self.parameters = parameters or {}
         self.base_path = base_path or Path(".")
+        self.resources: Dict[str, Any] = resources or {}
 
     @classmethod
     def load(cls, filepath: Path) -> "Module":
@@ -75,6 +81,7 @@ class Module:
             output_ports=data.get("output_ports", []),
             parameters=data.get("parameters", {}),
             base_path=filepath.parent,
+            resources=data.get("resources", {}),
         )
 
     def get_script_path(self) -> Optional[Path]:
@@ -103,4 +110,5 @@ class Module:
             "input_ports": self.input_ports,
             "output_ports": self.output_ports,
             "parameters": self.parameters,
+            "resources": self.resources,
         }

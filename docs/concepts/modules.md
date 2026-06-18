@@ -6,53 +6,90 @@ A **module** is a reusable computational unit defined by a JSON file. Modules ca
 
 ```json
 {
-  "name": "chain_builder",
-  "version": "1.0.0",
+  "id": "chain_builder",
+  "label": "Polymer Chain Builder",
+  "description": "Generates a polymer chain from monomer SMILES",
   "executable": "python3",
-  "script": "scripts/chain_builder.py",
-  "inputs": {
-    "species": {
-      "semantic_type": "http://modelwave.org/ns/MonomerSMILES"
-    }
-  },
-  "outputs": {
-    "polymer_chain": {
-      "semantic_type": "http://modelwave.org/ns/PolymerStructure"
-    }
-  },
+  "script": "../../scripts/chain_builder.py",
+  "input_ports":  [],
+  "output_ports": ["polymer_chain"],
   "parameters": {
-    "mw": 10000.0,
-    "unit_ratio": 1.0
+    "species": ["C(C)C"],
+    "unit_ratio": "1:0",
+    "mw": 5000.0
+  },
+  "resources": {
+    "partition": "cpu",
+    "cpus": 4,
+    "mem": "8G",
+    "time": "00:30:00"
+  },
+  "ontology_links": {
+    "class": "ModelWave:PolymerModelConstruction",
+    "outputs": {"polymer_chain": "ModelWave:PolymerStructure"}
+  },
+  "metadata": {
+    "version": "1.0",
+    "author": "CNR",
+    "license": "MIT"
   }
 }
 ```
 
-### Fields
+### Required Fields
 
-- **name**: Module identifier
-- **version**: Semantic version (for tracking)
-- **executable**: Command to run (e.g., `python3`, `bash`, `/usr/bin/myapp`)
-- **script**: Path to the script file (relative to module definition)
-- **inputs**: Dictionary of input ports with semantic types
-- **outputs**: Dictionary of output ports with semantic types
-- **parameters**: Default parameter values
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique module identifier |
+| `executable` | string | Command to run (`python3`, `bash`, …) |
+| `script` | string | Path to script, relative to the module JSON file |
+| `input_ports` | list | Names of expected input ports |
+| `output_ports` | list | Names of output ports (each becomes `<port>.json`) |
+
+### Optional Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `label` | string | Human-readable name |
+| `description` | string | What the module does |
+| `parameters` | dict | Default parameter values |
+| `resources` | dict | Per-module SLURM resource requirements (see below) |
+| `container` | string | Docker/Singularity image (future use) |
+| `ontology_links` | dict | Semantic type annotations |
+| `metadata` | dict | Version, author, license |
+
+### `resources` field
+
+When using the `remote` backend, each module can declare its own SLURM resource requirements:
+
+```json
+"resources": {
+  "partition": "gpu",
+  "cpus": 8,
+  "mem": "32G",
+  "time": "04:00:00",
+  "nodes": 1
+}
+```
+
+These override the global SLURM settings in `nexa_config.json` for that specific module. This allows compute-heavy modules (e.g. DFT, MD) to request different allocations than lightweight pre/post-processing modules within the same simulation.
 
 ## Script Interface
 
-Modules must accept these command-line arguments:
-
-### Required Arguments
+All module scripts must follow this interface:
 
 ```bash
---output_dir <directory>    # Where to write output files
+python3 script.py \
+    [--input <port> <path.json>] ...  \
+    [--params <params.json>]           \
+    --output_dir <dir>
 ```
 
-### Optional Arguments
+- `--input port path` — one flag per input connection; `port` matches a name in `input_ports`
+- `--params path` — JSON file with merged module + simulation parameters
+- `--output_dir dir` — directory where output files are written
 
-```bash
---params <file.json>        # JSON file with module parameters
---input <name> <file.json>  # Input data files (one per input port)
-```
+Each output port is written as `<output_dir>/<port>.json`.
 
 ### Example Module Script
 
@@ -68,27 +105,23 @@ def main():
     parser.add_argument("--params", default=None)
     parser.add_argument("--input", action="append", nargs=2, default=[])
     args = parser.parse_args()
-    
-    # Create output directory
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Load parameters
+
     params = {}
     if args.params:
         with open(args.params) as f:
             params = json.load(f)
-    
-    # Load inputs
+
     inputs = {}
     for name, path in args.input:
         with open(path) as f:
             inputs[name] = json.load(f)
-    
-    # Process data
+
+    # ... computation ...
     result = {"value": 42, **params}
-    
-    # Write output
+
     with open(output_dir / "output_data.json", "w") as f:
         json.dump(result, f, indent=2)
 
@@ -100,15 +133,13 @@ if __name__ == "__main__":
 
 ### Source Modules
 
-No input ports, only outputs:
+No input ports, only outputs (e.g. data generators, initial structure builders):
 
 ```json
 {
-  "name": "data_generator",
-  "inputs": {},
-  "outputs": {
-    "data": {"semantic_type": "http://example.org/Data"}
-  }
+  "id": "chain_builder",
+  "input_ports":  [],
+  "output_ports": ["polymer_chain"]
 }
 ```
 
@@ -118,95 +149,51 @@ Both inputs and outputs:
 
 ```json
 {
-  "name": "transformer",
-  "inputs": {
-    "raw_data": {"semantic_type": "http://example.org/RawData"}
-  },
-  "outputs": {
-    "processed_data": {"semantic_type": "http://example.org/ProcessedData"}
-  }
+  "id": "nanoparticle_builder",
+  "input_ports":  ["polymer_chain", "force_field"],
+  "output_ports": ["nanoparticle"]
 }
 ```
 
 ### Sink Modules
 
-Inputs only, no outputs:
+Inputs only, no outputs (e.g. analysis, reporting):
 
 ```json
 {
-  "name": "report_generator",
-  "inputs": {
-    "results": {"semantic_type": "http://example.org/Results"}
-  },
-  "outputs": {}
+  "id": "report_generator",
+  "input_ports":  ["results"],
+  "output_ports": []
 }
-```
-
-## Semantic Types
-
-Semantic types enable:
-- **Type checking**: Validate compatible connections
-- **Automatic workflow discovery**: Match modules by data types
-- **Documentation**: Self-describing interfaces
-
-Use URIs from domain ontologies:
-```
-http://modelwave.org/ns/PolymerStructure
-http://modelwave.org/ns/ForceFieldParameters
-http://purl.obolibrary.org/obo/CHEBI_24431
 ```
 
 ## Multi-Input Modules
 
-Modules can have multiple inputs:
+Modules can receive outputs from multiple upstream modules:
 
-```json
-{
-  "name": "nanoparticle_builder",
-  "inputs": {
-    "polymer_chain": {"semantic_type": "http://modelwave.org/ns/PolymerStructure"},
-    "force_field": {"semantic_type": "http://modelwave.org/ns/ForceFieldParameters"}
-  },
-  "outputs": {
-    "nanoparticle": {"semantic_type": "http://modelwave.org/ns/NanoparticleStructure"}
-  }
-}
-```
-
-Usage:
 ```bash
 python3 script.py \
   --input polymer_chain chain.json \
-  --input force_field ff.json \
+  --input force_field   ff.json    \
   --output_dir outputs/
 ```
 
 ## Multi-Output Modules
 
-Modules can produce multiple outputs:
+Modules can write multiple output ports:
 
-```json
-{
-  "name": "analyzer",
-  "outputs": {
-    "leaching_rate": {"semantic_type": "http://example.org/LeachingRate"},
-    "t_anneal": {"semantic_type": "http://example.org/Temperature"}
-  }
-}
-```
-
-Write each output to a separate file:
 ```python
-output_dir / "leaching_rate.json"
+# leaching_evaluator writes two ports
+output_dir / "molecular_leaching_rate.json"
 output_dir / "t_anneal.json"
 ```
 
+These can be consumed independently by different downstream modules.
+
 ## Best Practices
 
-✓ Use semantic versioning for modules  
-✓ Document semantic types with URIs  
-✓ Validate input data in scripts  
-✓ Write structured output (JSON preferred)  
-✓ Handle errors gracefully with exit codes  
-✓ Log progress to stdout/stderr  
-✓ Keep modules focused (single responsibility)  
+- Keep modules focused (single responsibility)
+- Use descriptive port names that match the data they carry
+- Always handle missing or empty inputs gracefully
+- Exit with a non-zero code on failure — NEXA uses the exit code to detect errors
+- Log progress to stdout/stderr for debugging

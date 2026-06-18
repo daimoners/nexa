@@ -1,38 +1,59 @@
 # Execution Backends
 
-NEXA supports multiple backends for workflow execution. All backends respect workflow DAG dependencies and enable parallel execution of independent modules.
+NEXA supports three backends for workflow execution. All backends respect DAG dependencies and return a structured `WorkflowResult` with per-module status.
 
-## Local backend
+## Choosing a Backend
 
-Runs modules using Python `subprocess` on the local machine. Best for development and testing.
+| Backend | Fan-out | Use case | Requirements |
+|---------|---------|----------|--------------|
+| `local` | `ThreadPoolExecutor` (parallel levels) | development, single machine | none |
+| `nextflow` | Nextflow DSL2 processes | containerized, reproducible | Nextflow installed |
+| `remote` | one `sbatch` per module | HPC clusters, per-module resources | SSH + SLURM |
+
+---
+
+## local
+
+Runs modules as subprocesses on the local machine. Independent modules (same topological level) execute concurrently via `ThreadPoolExecutor`.
 
 ```bash
 nexa workflow.json --backend local --workdir runs/myrun
 ```
 
-**Features:**
-- Sequential execution with automatic parallelization of independent modules
-- Fast startup (< 1 second)
-- Suitable for small to medium workflows
-- No external dependencies
+**Parallel execution** — modules are grouped into topological levels; all modules in the same level run simultaneously:
 
-## Nextflow backend 
+```
+level 0: [chain_builder, ff_builder]   ← parallel
+level 1: [nanoparticle_builder]
+level 2: [solvation_module]
+level 3: [leaching_evaluator]
+```
 
-Generates and runs a Nextflow pipeline with containerization support.
+**Python API:**
+
+```python
+result = executor.run(backend="local", workdir="runs/myrun")
+print(result.status)           # "success" | "failed"
+print(result.modules["chain_builder"].status)  # "success"
+```
+
+---
+
+## nextflow
+
+Generates a **Nextflow DSL2** script from the workflow and runs it. Each module becomes a Nextflow `process`; data flows through channels. See [Nextflow Integration](nextflow.md) for details.
 
 ```bash
 nexa workflow.json --backend nextflow --workdir runs/myrun
 ```
 
-**Features:**
-- Container-based execution (Docker/Singularity)
-- Reproducible environments
-- Checkpoint and resume capability
-- Workflow provenance tracking
+---
 
-## Remote backend (SLURM)
+## remote (SLURM)
 
-Executes workflows on HPC clusters using SLURM job scheduler via SSH.
+Submits each module as an independent `sbatch` job on a remote HPC cluster via SSH. NEXA polls `squeue`/`sacct` after each submission and proceeds to the next module once the current one completes.
+
+Each module can declare its own SLURM resource requirements via the `resources` field in `module.json`, overriding the global config for that specific module.
 
 ```bash
 nexa workflow.json \
@@ -40,13 +61,6 @@ nexa workflow.json \
   --remotehost cluster.example.com \
   --config nexa_config.json
 ```
-
-**Features:**
-- Dependency-aware SLURM job submission
-- Automatic parallel scheduling of independent modules
-- Job status monitoring via `squeue` and `sacct`
-- Result synchronization with `rsync`
-- Configurable SLURM parameters (partition, nodes, memory, time)
 
 ### Configuration
 
@@ -61,13 +75,12 @@ Create `nexa_config.json`:
     "private_key": "~/.ssh/id_rsa"
   },
   "slurm": {
-    "partition": "gpu",
+    "partition": "default",
     "nodes": 1,
-    "ntasks_per_node": 4,
-    "cpus_per_task": 2,
+    "ntasks": 1,
     "time": "01:00:00",
-    "mem_per_cpu": "4G",
-    "modules": ["python/3.10", "rdkit"]
+    "mem": "4G",
+    "modules": ["python/3.11", "rdkit"]
   },
   "execution": {
     "poll_interval": 5,
@@ -76,35 +89,44 @@ Create `nexa_config.json`:
 }
 ```
 
-### Example Execution
+`slurm.modules` lists environment modules to load in each job script (`module load …`).
 
-For a workflow with parallel modules:
+### Per-module resources
 
+Override global SLURM settings for individual modules in `module.json`:
+
+```json
+"resources": {
+  "partition": "gpu",
+  "cpus": 8,
+  "mem": "32G",
+  "time": "04:00:00"
+}
 ```
-chain_builder  ──┐
-                 ├──> nanoparticle_builder ──> solvation_module
-ff_builder  ─────┘
-```
 
-Timeline:
-1. `chain_builder` and `ff_builder` submitted simultaneously (SLURM jobs #1001, #1002)
-2. `nanoparticle_builder` submitted with `--dependency=afterok:1001:1002`
-3. `solvation_module` submitted after `nanoparticle_builder` completes
-4. Results automatically copied back to local machine
+Example: in a workflow where `chain_builder` is lightweight and `md_simulation` is heavy:
+
+| Module | partition | mem | time |
+|--------|-----------|-----|------|
+| `chain_builder` | *(global default)* | 4G | 01:00:00 |
+| `md_simulation` | gpu | 64G | 12:00:00 |
+
+### How it works
+
+For the 5-module demo:
+
+1. `chain_builder` submitted → polls until COMPLETED
+2. `ff_builder` submitted → polls until COMPLETED
+3. `nanoparticle_builder` submitted (both deps done) → polls until COMPLETED
+4. `solvation_module` submitted → polls until COMPLETED
+5. `leaching_evaluator` submitted → polls until COMPLETED
+6. All outputs `rsync`-ed back to local `workdir/outputs/`
+
+Note: the current implementation submits modules sequentially in topological order and waits for each before proceeding. Parallel submission of independent modules (level 0 in the example above) is planned.
 
 ### Requirements
 
-- SSH key-based authentication configured
-- SLURM installed on remote cluster
-- Python 3.10+ and dependencies on remote system
+- SSH key-based authentication to the remote host
+- SLURM installed on the cluster
+- Python 3.10+ with NEXA dependencies on the remote system
 - `rsync` available on both local and remote
-
-For detailed setup instructions, see `demo/README.md`.
-
-## Choosing a Backend
-
-| Backend | Use Case | Execution Speed | Setup Complexity |
-|---------|----------|----------------|------------------|
-| **local** | Development, testing, small workflows | Fast | None |
-| **nextflow** | Reproducible, containerized workflows | Medium | Medium (Docker/Singularity) |
-| **remote** | Large-scale HPC computations | Depends on queue | Medium (SSH + SLURM) |

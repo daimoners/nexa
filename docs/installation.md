@@ -3,15 +3,13 @@
 ## Requirements
 
 - Python >= 3.10
-- Node.js >= 14 (for visualization, >= 18 recommended)
-- Nextflow (optional, for Nextflow backend)
-- SSH access with key-based authentication (for remote SLURM backend)
+- `networkx` — DAG operations
+- `rdflib` — ontology support
 
-## Install from PyPI
-
-```bash
-pip install nexa
-```
+Optional:
+- Node.js >= 14 (>= 18 recommended) — for workflow visualization
+- Nextflow — for the `nextflow` backend
+- SSH key-based authentication + SLURM — for the `remote` backend
 
 ## Install from source
 
@@ -21,31 +19,36 @@ cd nexa
 pip install -e .
 ```
 
-This installs the `nexa` command-line tool.
+This registers the `nexa` and `nexa-viz` CLI commands.
 
-## Install visualization (optional)
-
-For web-based interactive workflow visualization:
+## Install from PyPI
 
 ```bash
-npm install -g nexa-viz
-```
-
-Or use it via npx without installation:
-
-```bash
-npx nexa-viz workflow.json
+pip install nexa
 ```
 
 ## Verify installation
 
 ```bash
-# Check NEXA version
 nexa --help
-
-# Check visualization tool (if installed)
-nexa-viz --help
+nexa-viz --help   # if Node.js is available
 ```
 
----
+## Install visualization (optional)
 
+```bash
+# Install globally
+npm install -g nexa-viz
+
+# Or use without installing
+npx nexa-viz workflow.json
+```
+
+## Remote backend setup
+
+For HPC execution via the `remote` backend:
+
+1. Configure SSH key-based authentication to the cluster
+2. Ensure Python 3.10+ with NEXA dependencies is available on the remote system
+3. Ensure `sbatch`, `squeue`, `sacct`, and `rsync` are on PATH on both machines
+4. Create `nexa_config.json` with your cluster settings (see [Execution Backends](execution/backends.md))

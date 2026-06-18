@@ -6,21 +6,19 @@ A **workflow** in NEXA is a JSON file that defines a directed acyclic graph (DAG
 
 ```json
 {
-  "name": "my_workflow",
+  "workflow_id": "my_workflow",
+  "scale": "molecular",
+  "indicator": "leaching_rate",
+  "accuracy": "estimated",
+  "description": "Example multi-module workflow",
   "modules": [
-    {
-      "id": "module_a",
-      "definition": "path/to/module_a.json"
-    },
-    {
-      "id": "module_b",
-      "definition": "path/to/module_b.json"
-    }
+    { "id": "module_a", "ref": "modules/module_a/module_a.json" },
+    { "id": "module_b", "ref": "modules/module_b/module_b.json" }
   ],
   "connections": [
     {
-      "from": {"module": "module_a", "port": "output_data"},
-      "to": {"module": "module_b", "port": "input_data"}
+      "from": { "module": "module_a", "output": "result"     },
+      "to":   { "module": "module_b", "input":  "input_data" }
     }
   ]
 }
@@ -28,44 +26,54 @@ A **workflow** in NEXA is a JSON file that defines a directed acyclic graph (DAG
 
 ### Fields
 
-- **name**: Workflow identifier
-- **modules**: List of module instances with unique IDs
-  - **id**: Instance identifier (unique within workflow)
-  - **definition**: Path to module JSON definition file
-- **connections**: Data flow between modules
-  - **from**: Source module ID and output port name
-  - **to**: Target module ID and input port name
+| Field | Required | Description |
+|-------|----------|-------------|
+| `workflow_id` | yes | Unique workflow identifier |
+| `modules` | yes | List of module instances |
+| `connections` | yes | Data-flow edges between modules |
+| `scale` | no | Physical scale (e.g. `molecular`, `mesoscale`) |
+| `indicator` | no | Target property (e.g. `leaching_rate`) |
+| `accuracy` | no | Accuracy class (e.g. `estimated`, `high`) |
+| `description` | no | Human-readable description |
+
+Each entry in `modules`:
+- `id` — instance identifier, unique within the workflow
+- `ref` — path to the module JSON definition, **relative to the workflow file's directory**
+
+Each entry in `connections`:
+- `from.module` / `from.output` — source module id and output port name
+- `to.module` / `to.input` — target module id and input port name
 
 ## Example: 5-Module Workflow
 
-The demo workflow demonstrates common patterns:
-
 ```json
 {
-  "name": "advanced_demo_workflow",
+  "workflow_id": "polymer_nanoparticle_leaching",
+  "scale": "molecular",
+  "indicator": "leaching_rate",
   "modules": [
-    {"id": "chain_builder", "definition": "modules/chain_builder/chain_builder.json"},
-    {"id": "ff_builder", "definition": "modules/ff_builder/ff_builder.json"},
-    {"id": "nanoparticle_builder", "definition": "modules/nanoparticle_builder/nanoparticle_builder.json"},
-    {"id": "solvation_module", "definition": "modules/solvation_module/solvation_module.json"},
-    {"id": "leaching_evaluator", "definition": "modules/leaching_evaluator/leaching_evaluator.json"}
+    { "id": "chain_builder",        "ref": "modules/chain_builder/chain_builder.json" },
+    { "id": "ff_builder",           "ref": "modules/ff_builder/ff_builder.json" },
+    { "id": "nanoparticle_builder", "ref": "modules/nanoparticle_builder/nanoparticle_builder.json" },
+    { "id": "solvation_module",     "ref": "modules/solvation_module/solvation_module.json" },
+    { "id": "leaching_evaluator",   "ref": "modules/leaching_evaluator/leaching_evaluator.json" }
   ],
   "connections": [
     {
-      "from": {"module": "chain_builder", "port": "polymer_chain"},
-      "to": {"module": "nanoparticle_builder", "port": "polymer_chain"}
+      "from": { "module": "chain_builder",        "output": "polymer_chain" },
+      "to":   { "module": "nanoparticle_builder", "input":  "polymer_chain" }
     },
     {
-      "from": {"module": "ff_builder", "port": "force_field"},
-      "to": {"module": "nanoparticle_builder", "port": "force_field"}
+      "from": { "module": "ff_builder",           "output": "force_field"  },
+      "to":   { "module": "nanoparticle_builder", "input":  "force_field"  }
     },
     {
-      "from": {"module": "nanoparticle_builder", "port": "nanoparticle"},
-      "to": {"module": "solvation_module", "port": "nanoparticle"}
+      "from": { "module": "nanoparticle_builder", "output": "nanoparticle"    },
+      "to":   { "module": "solvation_module",     "input":  "nanoparticle"    }
     },
     {
-      "from": {"module": "solvation_module", "port": "solvated_system"},
-      "to": {"module": "leaching_evaluator", "port": "solvated_system"}
+      "from": { "module": "solvation_module",   "output": "solvated_system" },
+      "to":   { "module": "leaching_evaluator", "input":  "solvated_system" }
     }
   ]
 }
@@ -73,68 +81,65 @@ The demo workflow demonstrates common patterns:
 
 ## Workflow Patterns
 
-### Parallel Execution
+### Parallel Sources
 
-Modules without dependencies run in parallel:
+Modules with no incoming connections start immediately and run in the same topological level:
 
 ```
-module_a  ──┐
-            ├──> module_c
-module_b  ──┘
+chain_builder  ──┐
+                 ├──▶ nanoparticle_builder
+ff_builder     ──┘
 ```
 
-`module_a` and `module_b` execute simultaneously.
+`chain_builder` and `ff_builder` have no dependency between them → they execute simultaneously.
 
 ### Data Fusion
 
-Multiple outputs merge into one module:
+Multiple upstream outputs merge into one module's inputs:
 
 ```
 source_1 ─┐
-          ├─> processor
+          ├─▶ processor
 source_2 ─┘
 ```
 
-`processor` waits for both inputs before starting.
+`processor` waits for all inputs before starting.
 
 ### Multi-Output
 
-One module produces multiple outputs:
+One module produces multiple output ports consumed by different downstream modules:
 
 ```
-analyzer ──┬──> result_a
-          └──> result_b
+analyzer ──┬──▶ consumer_a
+           └──▶ consumer_b
 ```
-
-Different modules can consume different outputs.
 
 ## Execution Order
 
-NEXA automatically determines execution order using **topological sorting** on the workflow DAG:
+NEXA automatically determines execution order using **topological sorting** (Kahn's algorithm). Modules are grouped into **topological levels**: all modules in the same level have their dependencies satisfied and can execute concurrently.
 
-1. Identify modules without dependencies (sources)
-2. Execute sources in parallel
-3. Execute dependent modules once all inputs are ready
-4. Repeat until all modules complete
+For the 5-module demo workflow:
 
-Example execution order for the 5-module workflow:
 ```
-['chain_builder', 'ff_builder', 'nanoparticle_builder', 'solvation_module', 'leaching_evaluator']
+level 0: [chain_builder, ff_builder]   ← no dependencies, run in parallel
+level 1: [nanoparticle_builder]        ← depends on level 0
+level 2: [solvation_module]            ← depends on level 1
+level 3: [leaching_evaluator]          ← depends on level 2
 ```
+
+The local backend runs each level concurrently via `ThreadPoolExecutor`; the remote backend submits each module as an independent SLURM job and polls for completion.
 
 ## Validation
 
 NEXA validates workflows before execution:
 
-- **No cycles**: Workflows must be acyclic (DAG)
-- **Port matching**: Connections must link existing ports
-- **Type compatibility**: Output/input types must match (via semantic types)
-- **No orphans**: All modules must be reachable
+- **No cycles** — workflows must be acyclic (DAG); a `ValueError` is raised if a cycle is detected
+- **Module refs** — all `ref` paths must resolve to existing module JSON files
+- **Port existence** — connections must reference ports declared in `input_ports` / `output_ports`
 
 ## Best Practices
 
-✓ Use descriptive module IDs  
-✓ Document workflow purpose in the `name` field  
-✓ Group related modules in subdirectories  
-✓ Keep workflows focused (< 20 modules per workflow)  
-✓ Use semantic types for all ports  
+- Use descriptive `workflow_id` values that encode scale and indicator
+- Keep `ref` paths relative to the workflow file so the workflow is portable
+- Group module definitions in a `modules/` subdirectory alongside the workflow JSON
+- Keep workflows focused (< 20 modules); split large pipelines into composable sub-workflows

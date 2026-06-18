@@ -54,3 +54,6 @@ nexa_config.json
 *.log
 *.tmp
 .DS_Store
+
+# Docs
+site/

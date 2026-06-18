@@ -1,74 +1,79 @@
 # nexa/backends/nextflow.py
 """
-Nextflow backend for the Nexus workflow executor.
-Generates and runs a valid Nextflow DSL2 pipeline from a concrete workflow.
+Nextflow backend: generates a Nextflow DSL2 script from the concrete workflow
+and executes it. Returns a WorkflowResult after execution.
 """
 import subprocess
 import json
 from pathlib import Path
 from textwrap import dedent
 from typing import Dict, Any
-from .base import BaseBackend
+from .base import BaseBackend, ModuleResult, WorkflowResult
 from ..core.workflow import Workflow
 
 
 class NextflowBackend(BaseBackend):
-    """
-    Backend that generates a Nextflow DSL2 script and executes it.
-    """
+    """Backend that generates a Nextflow DSL2 script and executes it."""
 
-    def execute(self, workflow: Workflow, parameters: Dict[str, Any] = None):
-        """
-        Generate and run a Nextflow pipeline.
-
-        Parameters
-        ----------
-        workflow : Workflow
-            The concrete workflow to execute.
-        parameters : dict, optional
-            Global parameters to pass to all modules via params.json.
-        """
+    def execute(self, workflow: Workflow, parameters: Dict[str, Any] = None) -> WorkflowResult:
         nf_script = self._generate_nextflow(workflow, parameters)
         nf_path = self.workdir / "main.nf"
-        with open(nf_path, "w") as f:
-            f.write(nf_script)
+        nf_path.write_text(nf_script)
 
+        cmd = ["nextflow", "run", str(nf_path)]
         if parameters:
             param_file = self.workdir / "params.json"
-            with open(param_file, "w") as f:
-                json.dump(parameters, f, indent=2)
-            cmd = ["nextflow", "run", str(nf_path), "-params-file", str(param_file)]
-        else:
-            cmd = ["nextflow", "run", str(nf_path)]
+            param_file.write_text(json.dumps(parameters, indent=2))
+            cmd += ["-params-file", str(param_file)]
 
         print(f"Running Nextflow: {' '.join(cmd)}")
-        subprocess.run(cmd, check=True)
-        print("Nextflow workflow completed successfully.")
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        except FileNotFoundError:
+            raise RuntimeError("nextflow not found on PATH")
+
+        ok = proc.returncode == 0
+        if ok:
+            print("Nextflow workflow completed successfully.")
+        else:
+            print(f"Nextflow workflow failed (rc={proc.returncode}).")
+
+        # Build per-module results from the outputs/ tree (best effort)
+        module_results: Dict[str, ModuleResult] = {}
+        outputs_dir = self.workdir / "outputs"
+        for mod in workflow.modules:
+            out_dir = outputs_dir / mod.id
+            outputs = {port: str(out_dir / f"{port}.json") for port in mod.output_ports}
+            all_present = all(Path(p).exists() for p in outputs.values())
+            module_results[mod.id] = ModuleResult(
+                module_id=mod.id,
+                status="success" if all_present else ("failed" if not ok else "unknown"),
+                outputs=outputs,
+                returncode=proc.returncode if not all_present else 0,
+            )
+
+        return WorkflowResult(
+            workflow_id=workflow.workflow_id,
+            status="success" if ok else "failed",
+            modules=module_results,
+            outputs_dir=outputs_dir,
+            error="" if ok else proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else "",
+        )
 
     def _generate_nextflow(self, workflow: Workflow, parameters: Dict[str, Any] = None) -> str:
-        """
-        Generate a valid Nextflow DSL2 script.
-
-        Key rules for DSL2:
-        - Each process emits named outputs.
-        - Workflow block assigns process results to variables.
-        - Inputs are passed as `result.output_name`.
-        """
-        # Step 1: Generate process definitions
         process_blocks = []
         for mod in workflow.modules:
-            # Input block: list of val(port_name)
             input_ports = set()
             for conn in workflow.connections:
                 if conn["to"]["module"] == mod.id:
                     input_ports.add(conn["to"]["input"])
-            input_block = "\n        ".join(f"val({port})" for port in sorted(input_ports)) or "/* no inputs */"
+            input_block = "\n        ".join(
+                f"val({port})" for port in sorted(input_ports)
+            ) or "/* no inputs */"
 
-            # Output block: emit one channel per output port
             output_lines = [f'path "{port}.json", emit: {port}' for port in mod.output_ports]
-            output_block = "\n        ".join(output_lines) if output_lines else '/* no outputs */'
+            output_block = "\n        ".join(output_lines) if output_lines else "/* no outputs */"
 
-            # Script command with absolute path
             script_path = mod.get_script_path()
             if script_path is None:
                 raise ValueError(f"Module '{mod.id}' has no script defined.")
@@ -76,7 +81,7 @@ class NextflowBackend(BaseBackend):
             if parameters:
                 script_cmd += " --params params.json"
 
-            process_def = f"""
+            process_blocks.append(f"""
 process {mod.id} {{
     input:
         {input_block}
@@ -87,41 +92,25 @@ process {mod.id} {{
     {script_cmd}
     \"\"\"
 }}
-"""
-            process_blocks.append(process_def)
+""")
 
-        # Step 2: Build workflow block with explicit variable assignment
         workflow_lines = []
-        module_vars = {}  # module_id → result variable name
-        execution_order = workflow.get_execution_order()
-
-        for mod_id in execution_order:
+        module_vars: Dict[str, str] = {}
+        for mod_id in workflow.get_execution_order():
             mod = workflow.module_map[mod_id]
-
-            # Collect inputs from connections
             input_args = []
             for conn in workflow.connections:
                 if conn["to"]["module"] == mod_id:
-                    src_mod = conn["from"]["module"]
-                    src_port = conn["from"]["output"]
-                    src_var = module_vars[src_mod]
-                    input_args.append(f"{src_var}.{src_port}")
-
-            # Sort to ensure consistent order (matches input block)
+                    src_var = module_vars[conn["from"]["module"]]
+                    input_args.append(f"{src_var}.{conn['from']['output']}")
             input_args.sort()
-
-            if input_args:
-                call = f"{mod.id}({', '.join(input_args)})"
-            else:
-                call = f"{mod.id}()"
-
+            call = f"{mod_id}({', '.join(input_args)})" if input_args else f"{mod_id}()"
             result_var = f"{mod_id}_out"
             module_vars[mod_id] = result_var
             workflow_lines.append(f"    {result_var} = {call}")
 
         workflow_block = "workflow {\n" + "\n".join(workflow_lines) + "\n}"
 
-        # Combine all parts
         return dedent(f"""\
 nextflow.enable.dsl=2
 
