@@ -187,7 +187,7 @@ nexa workflow.json --backend remote --remotehost cluster.example.com \
 |---------|---------|----------|
 | `local` | thread pool (parallel levels) | development, single machine |
 | `nextflow` | Nextflow DSL2 | container-based, reproducible |
-| `remote` | one `sbatch` per module | HPC clusters, per-module resource control |
+| `remote` | `sbatch --dependency` per module (parallel) | HPC clusters, per-module resource control |
 
 ## Parallel Execution (local backend)
 

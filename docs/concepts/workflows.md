@@ -127,7 +127,9 @@ level 2: [solvation_module]            ← depends on level 1
 level 3: [leaching_evaluator]          ← depends on level 2
 ```
 
-The local backend runs each level concurrently via `ThreadPoolExecutor`; the remote backend submits each module as an independent SLURM job and polls for completion.
+Both backends exploit this structure:
+- **local** — runs each level concurrently via `ThreadPoolExecutor`
+- **remote** — submits all modules upfront via `sbatch --dependency=afterok:<ids>`, letting SLURM run independent modules in parallel and release dependent ones automatically
 
 ## Validation
 

@@ -51,7 +51,7 @@ nexa workflow.json --backend nextflow --workdir runs/myrun
 
 ## remote (SLURM)
 
-Submits each module as an independent `sbatch` job on a remote HPC cluster via SSH. NEXA polls `squeue`/`sacct` after each submission and proceeds to the next module once the current one completes.
+Submits **all modules upfront** as independent `sbatch` jobs on a remote HPC cluster via SSH. Each module's submission includes a `--dependency=afterok:<dep_ids>` directive encoding its specific upstream dependencies — so SLURM manages the DAG natively. Independent modules (same topological level) run in parallel; dependent modules start automatically once their inputs are ready. After all submissions, a single polling loop checks job status via `squeue`/`sacct`.
 
 Each module can declare its own SLURM resource requirements via the `resources` field in `module.json`, overriding the global config for that specific module.
 
@@ -113,16 +113,19 @@ Example: in a workflow where `chain_builder` is lightweight and `md_simulation` 
 
 ### How it works
 
-For the 5-module demo:
+For the 5-module demo, all 5 jobs are submitted immediately:
 
-1. `chain_builder` submitted → polls until COMPLETED
-2. `ff_builder` submitted → polls until COMPLETED
-3. `nanoparticle_builder` submitted (both deps done) → polls until COMPLETED
-4. `solvation_module` submitted → polls until COMPLETED
-5. `leaching_evaluator` submitted → polls until COMPLETED
-6. All outputs `rsync`-ed back to local `workdir/outputs/`
+```
+sbatch chain_builder        (no deps)        → job #1001
+sbatch ff_builder           (no deps)        → job #1002
+sbatch nanoparticle_builder --dependency=afterok:1001:1002  → job #1003
+sbatch solvation_module     --dependency=afterok:1003       → job #1004
+sbatch leaching_evaluator   --dependency=afterok:1004       → job #1005
+```
 
-Note: the current implementation submits modules sequentially in topological order and waits for each before proceeding. Parallel submission of independent modules (level 0 in the example above) is planned.
+Jobs `#1001` and `#1002` start immediately and run in parallel. SLURM releases `#1003` only after both complete, and so on. NEXA then polls all pending jobs in a single loop until everything is done, then `rsync`s outputs back.
+
+This is the most efficient use of SLURM: the scheduler can optimize placement for all jobs at once, and independent modules overlap without any coordination overhead from NEXA.
 
 ### Requirements
 
