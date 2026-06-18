@@ -261,7 +261,7 @@ See [LICENSE](LICENSE) for details.
 ```bibtex
 @software{nexa_2025,
   title  = {NEXA: Semantic Workflow Engine},
-  author = {NEXA Contributors},
+  author = {DAIMON Team},
   year   = {2025},
   url    = {https://github.com/daimoners/nexa}
 }
