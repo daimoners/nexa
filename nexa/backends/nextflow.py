@@ -37,14 +37,17 @@ class NextflowBackend(BaseBackend):
             cmd += ["-params-file", "params.json"]
 
         print(f"Running Nextflow: {' '.join(cmd)}")
+        print("─" * 60)
         try:
-            # Run from workdir so publishDir paths resolve correctly
+            # stdout passes through to the terminal in real time (None = inherit).
+            # stderr is captured so we can include it in WorkflowResult on failure.
             proc = subprocess.run(
-                cmd, capture_output=True, text=True, check=False,
+                cmd, stdout=None, stderr=subprocess.PIPE, text=True, check=False,
                 cwd=str(self.workdir),
             )
         except FileNotFoundError:
             raise RuntimeError("nextflow not found on PATH")
+        print("─" * 60)
 
         ok = proc.returncode == 0
         if ok:
@@ -52,7 +55,7 @@ class NextflowBackend(BaseBackend):
         else:
             print(f"Nextflow workflow failed (rc={proc.returncode}).")
             if proc.stderr.strip():
-                print(proc.stderr.strip()[-500:])
+                print(proc.stderr.strip())
 
         # Build WorkflowResult from publishDir outputs
         outputs_dir = self.workdir / "outputs"
@@ -69,12 +72,13 @@ class NextflowBackend(BaseBackend):
                 stderr=proc.stderr if not all_present else "",
             )
 
+        stderr = (proc.stderr or "").strip()
         return WorkflowResult(
             workflow_id=workflow.workflow_id,
             status="success" if ok else "failed",
             modules=module_results,
             outputs_dir=outputs_dir,
-            error="" if ok else (proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else ""),
+            error="" if ok else (stderr.splitlines()[-1] if stderr else f"exit code {proc.returncode}"),
         )
 
     def _generate_nextflow(self, workflow: Workflow, parameters: Dict[str, Any] = None) -> str:

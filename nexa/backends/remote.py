@@ -229,7 +229,7 @@ class RemoteBackend(BaseBackend):
             inputs = {
                 conn["to"]["input"]: (
                     f"{self.remote_workdir}/outputs/"
-                    f"{conn['from']['module']}/{conn['from']['output']}.json"
+                    f"{conn['from']['module']}/{conn['from']['output']}"
                 )
                 for conn in workflow.connections
                 if conn["to"]["module"] == mod_id
@@ -284,7 +284,7 @@ class RemoteBackend(BaseBackend):
                     f"{self.remote_workdir}/outputs/{mod_id}", local_out
                 )
                 outputs = {
-                    port: str(local_out / f"{port}.json")
+                    port: str(local_out / port)
                     for port in workflow.module_map[mod_id].output_ports
                 }
                 module_results[mod_id] = ModuleResult(

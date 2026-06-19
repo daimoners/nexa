@@ -26,7 +26,7 @@ class LocalBackend(BaseBackend):
         self.parallel = parallel
 
     def _get_output_path(self, module_id: str, port: str) -> Path:
-        return self.outputs_dir / module_id / f"{port}.json"
+        return self.outputs_dir / module_id / port
 
     def _run_module(self, module, inputs: Dict[str, Path], params: Dict[str, Any]) -> ModuleResult:
         """Run a single module as a subprocess; return a ModuleResult."""
@@ -53,7 +53,7 @@ class LocalBackend(BaseBackend):
         print(f"Running: {' '.join(str(c) for c in cmd)}")
 
         proc = subprocess.run(cmd, capture_output=True, text=True)
-        outputs = {port: str(out_dir / f"{port}.json") for port in module.output_ports}
+        outputs = {port: str(out_dir / port) for port in module.output_ports}
 
         if proc.returncode != 0:
             err = proc.stderr.strip()
